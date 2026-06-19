@@ -15,82 +15,32 @@ const io = new Server(server, {
 const PORT = process.env.PORT || 3000;
 
 // --- DATABASE SETUP ---
-// Connect to Cloudflare D1 Database using the REST API
-const CLOUDFLARE_ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID;
-const CLOUDFLARE_DATABASE_ID = process.env.CLOUDFLARE_DATABASE_ID;
-const CLOUDFLARE_API_TOKEN = process.env.CLOUDFLARE_API_TOKEN;
-
-const pool = {
-    async query(sql, params = []) {
-        if (!CLOUDFLARE_ACCOUNT_ID || !CLOUDFLARE_DATABASE_ID || !CLOUDFLARE_API_TOKEN) {
-            console.error('Missing Cloudflare D1 environment variables: CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_DATABASE_ID, or CLOUDFLARE_API_TOKEN.');
-            throw new Error('Database configuration missing');
-        }
-
-        // Convert Postgres $1, $2, etc. placeholders to SQLite ?1, ?2, etc.
-        const sqliteSql = sql.replace(/\$(\d+)/g, '?$1');
-
-        const url = `https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database/${CLOUDFLARE_DATABASE_ID}/query`;
-
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${CLOUDFLARE_API_TOKEN}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                sql: sqliteSql,
-                params: params
-            })
-        });
-
-        if (!response.ok) {
-            const errText = await response.text();
-            throw new Error(`Cloudflare D1 HTTP query failed: ${response.status} ${response.statusText} - ${errText}`);
-        }
-
-        const data = await response.json();
-        if (!data.success) {
-            throw new Error(`Cloudflare D1 API returned success=false: ${JSON.stringify(data.errors)}`);
-        }
-
-        const queryResult = data.result[0];
-        if (!queryResult.success) {
-            throw new Error(`Cloudflare D1 execution failed: ${JSON.stringify(queryResult.errors || 'Unknown query error')}`);
-        }
-
-        return {
-            rows: queryResult.results || [],
-            meta: queryResult.meta
-        };
-    }
-};
+const { MongoClient } = require('mongodb');
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://ibuage2_db_user:urrKM0PfYOTp0mbi@member1.c7sbnep.mongodb.net';
+const client = new MongoClient(MONGODB_URI);
+let db;
 
 // Initialize database table if it doesn't exist
 async function initDB() {
     try {
-        await pool.query(`
-            CREATE TABLE IF NOT EXISTS players (
-                id TEXT UNIQUE,
-                username VARCHAR(50),
-                score BIGINT DEFAULT 0
-            )
-        `);
+        await client.connect();
+        db = client.db(); // Uses database from MONGODB_URI
+        console.log('Connected to MongoDB successfully.');
 
-        await pool.query(`
-            CREATE TABLE IF NOT EXISTS settings (
-                key VARCHAR(50) PRIMARY KEY,
-                value TEXT
-            )
-        `);
+        // Initialize unique indexes
+        await db.collection('players').createIndex({ id: 1 }, { unique: true });
+        await db.collection('settings').createIndex({ key: 1 }, { unique: true });
 
-        await pool.query(`
-            INSERT INTO settings (key, value) VALUES ('news', 'Selamat datang di Pop Balil 3!') ON CONFLICT (key) DO NOTHING
-        `);
+        // Insert default settings document
+        await db.collection('settings').updateOne(
+            { key: 'news' },
+            { $setOnInsert: { value: 'Selamat datang di Pop Balil 3!' } },
+            { upsert: true }
+        );
 
-        console.log('Database tables are ready in Cloudflare D1.');
+        console.log('Database tables are ready in MongoDB.');
     } catch (err) {
-        console.error('Error initializing database at startup:', err);
+        console.error('Error initializing MongoDB database at startup:', err);
     }
 }
 initDB();
@@ -98,10 +48,13 @@ initDB();
 // Fetch all players to format leaderboard
 async function getAllPlayers() {
     try {
-        const res = await pool.query('SELECT username, score FROM players ORDER BY score DESC');
+        if (!db) return {};
+        const players = await db.collection('players').find().sort({ score: -1 }).toArray();
         const playersObj = {};
-        res.rows.forEach(row => {
-            playersObj[row.username] = { score: parseInt(row.score, 10) };
+        players.forEach(p => {
+            if (p.username) {
+                playersObj[p.username] = { score: parseInt(p.score, 10) || 0 };
+            }
         });
         return playersObj;
     } catch (err) {
@@ -124,9 +77,11 @@ io.on('connection', async (socket) => {
 
     // Fetch and send news
     try {
-        const newsRes = await pool.query("SELECT value FROM settings WHERE key = 'news'");
-        if (newsRes.rows.length > 0) {
-            socket.emit('newsUpdate', newsRes.rows[0].value);
+        if (db) {
+            const newsDoc = await db.collection('settings').findOne({ key: 'news' });
+            if (newsDoc) {
+                socket.emit('newsUpdate', newsDoc.value);
+            }
         }
     } catch (err) {
         console.error('Error fetching news:', err);
@@ -149,21 +104,22 @@ io.on('connection', async (socket) => {
         socket.username = username;
 
         try {
+            if (!db) throw new Error('Database not initialized');
             // Check if user exists
-            const res = await pool.query('SELECT username, score FROM players WHERE id = $1', [id]);
+            const player = await db.collection('players').findOne({ id: id });
 
             let score = 0;
-            if (res.rows.length > 0) {
+            if (player) {
                 // User exists
-                score = parseInt(res.rows[0].score, 10);
-                if (res.rows[0].username && res.rows[0].username !== username) {
-                    username = res.rows[0].username;
+                score = parseInt(player.score, 10) || 0;
+                if (player.username && player.username !== username) {
+                    username = player.username;
                     socket.username = username;
                     socket.emit('usernameUpdated', username);
                 }
             } else {
                 // New user
-                await pool.query('INSERT INTO players (id, username, score) VALUES ($1, $2, $3)', [id, username, 0]);
+                await db.collection('players').insertOne({ id: id, username: username, score: 0 });
             }
 
             // Send initial score to the newly connected user
@@ -182,19 +138,18 @@ io.on('connection', async (socket) => {
         if (!id) return;
 
         try {
+            if (!db) throw new Error('Database not initialized');
             // Increment logic atomically to prevent race conditions
-            const updateRes = await pool.query(
-                'UPDATE players SET score = score + 1 WHERE id = $1 RETURNING score',
-                [id]
+            const updatedDoc = await db.collection('players').findOneAndUpdate(
+                { id: id },
+                { 
+                    $inc: { score: 1 },
+                    $setOnInsert: { username: socket.username || id }
+                },
+                { returnDocument: 'after', upsert: true }
             );
 
-            let newScore = 1;
-            if (updateRes.rows.length > 0) {
-                newScore = parseInt(updateRes.rows[0].score, 10);
-            } else {
-                // Failsafe: if somehow user popped before initialization
-                await pool.query('INSERT INTO players (id, username, score) VALUES ($1, $2, $3)', [id, socket.username || id, 1]);
-            }
+            const newScore = updatedDoc ? (parseInt(updatedDoc.score, 10) || 0) : 1;
 
             // Immediately send back updated score to the user clicking
             socket.emit('userScore', newScore);
