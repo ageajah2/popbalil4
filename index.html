@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Pop Balil 3</title>
+    <meta name="description" content="Pop Balil 2 - The ultimate clicking game with Lahadia">
+    <link rel="icon" type="image/png" href="images/favicon.png">
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;700;900&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <div id="login-overlay" class="glass-heavy">
+        <div id="login-box">
+            <h2>Maligayang pagdating</h2>
+            <p>Masukkan username!<br>Tahan dan geser untuk mengganti karakter</p>
+            <input type="text" id="username-input" placeholder="Type name here..." maxlength="20">
+            <button id="start-btn" class="btn-primary">START</button>
+        </div>
+    </div>
+
+    <style>
+        #qris-overlay.hidden,
+        #news-overlay.hidden {
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+        }
+    </style>
+    <div id="qris-overlay" class="glass-heavy hidden"
+        style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 200; display: flex; align-items: center; justify-content: center; flex-direction: column; transition: opacity 0.5s ease, visibility 0.5s ease;">
+        <div
+            style="background: rgba(255, 255, 255, 0.1); padding: 20px; border-radius: 20px; text-align: center; border: 1px solid rgba(255, 255, 255, 0.2); backdrop-filter: blur(15px);">
+            <h2 style="color: var(--primary-color); margin-bottom: 15px;">Donate via QRIS</h2>
+            <img src="images/qris.jpeg" alt="QRIS" style="max-width: 100%; width: 250px; border-radius: 15px;">
+            <br>
+            <button id="close-qris-btn" class="btn-primary" style="margin-top: 20px; padding: 10px 30px;">Close</button>
+        </div>
+    </div>
+
+    <div id="news-overlay" class="glass-heavy hidden"
+        style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 300; display: flex; align-items: center; justify-content: center; flex-direction: column; transition: opacity 0.5s ease, visibility 0.5s ease;">
+        <div
+            style="background: rgba(255, 255, 255, 0.1); padding: 30px; border-radius: 20px; text-align: center; border: 1px solid rgba(255, 255, 255, 0.2); backdrop-filter: blur(15px); max-width: 80%;">
+            <h2 style="color: var(--primary-color); margin-bottom: 15px;">PENGUMUMAN</h2>
+            <p id="news-content" style="color: white; font-size: 1.2rem; margin-bottom: 20px;">Fetching news...</p>
+            <button id="close-news-btn" class="btn-primary" style="padding: 10px 30px;">Tutup</button>
+        </div>
+    </div>
+
+    <div id="game-container">
+        <div id="score-container" class="glass">
+            <h1 id="score-label">POPS</h1>
+            <div id="score">0</div>
+        </div>
+
+        <div id="character-wrapper">
+            <img id="character" src="chara/cat1.png" alt="Pop Balil Character" draggable="false">
+        </div>
+
+        <div id="leaderboard-container" class="glass">
+            <div
+                style="display: flex; align-items: center; justify-content: center; position: relative; padding-top: 10px;">
+                <button id="donate-btn"
+                    style="position: absolute; left: 0; background: var(--primary-color); color: #000; border: none; padding: 5px 12px; border-radius: 10px; font-weight: bold; cursor: pointer; z-index: 10;">Donate</button>
+                <h3 style="padding-top: 0; margin: 0;">TOP SINGKO</h3>
+            </div>
+            <div id="leaderboard-list">
+                <div class="leaderboard-item loading">Loading rankings...</div>
+            </div>
+            <div id="user-info">
+                Hi, <span id="display-username">Manusia</span>!
+            </div>
+            <div id="footer">
+                <p>Made with &hearts; for Indonesia</p>
+            </div>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script type="module" src="script.js"></script>
+</body>
+
+</html>
