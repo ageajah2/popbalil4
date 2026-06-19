@@ -3,7 +3,6 @@ const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
 const cors = require('cors');
-const { Pool } = require('pg');
 
 const app = express();
 const server = http.createServer(app);
@@ -16,44 +15,80 @@ const io = new Server(server, {
 const PORT = process.env.PORT || 3000;
 
 // --- DATABASE SETUP ---
-// Connect to the DB using DATABASE_URL (usually provided by Railway)
-const pool = new Pool({
-    connectionString: process.env.DATABASE_URL || 'postgresql://postgres:yvTrdgBQgxxHuflNcAziuHHRljeXrtvW@postgres.railway.internal:5432/railway',
-    ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
-});
+// Connect to Cloudflare D1 Database using the REST API
+const CLOUDFLARE_ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID;
+const CLOUDFLARE_DATABASE_ID = process.env.CLOUDFLARE_DATABASE_ID;
+const CLOUDFLARE_API_TOKEN = process.env.CLOUDFLARE_API_TOKEN;
+
+const pool = {
+    async query(sql, params = []) {
+        if (!CLOUDFLARE_ACCOUNT_ID || !CLOUDFLARE_DATABASE_ID || !CLOUDFLARE_API_TOKEN) {
+            console.error('Missing Cloudflare D1 environment variables: CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_DATABASE_ID, or CLOUDFLARE_API_TOKEN.');
+            throw new Error('Database configuration missing');
+        }
+
+        // Convert Postgres $1, $2, etc. placeholders to SQLite ?1, ?2, etc.
+        const sqliteSql = sql.replace(/\$(\d+)/g, '?$1');
+
+        const url = `https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database/${CLOUDFLARE_DATABASE_ID}/query`;
+
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${CLOUDFLARE_API_TOKEN}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                sql: sqliteSql,
+                params: params
+            })
+        });
+
+        if (!response.ok) {
+            const errText = await response.text();
+            throw new Error(`Cloudflare D1 HTTP query failed: ${response.status} ${response.statusText} - ${errText}`);
+        }
+
+        const data = await response.json();
+        if (!data.success) {
+            throw new Error(`Cloudflare D1 API returned success=false: ${JSON.stringify(data.errors)}`);
+        }
+
+        const queryResult = data.result[0];
+        if (!queryResult.success) {
+            throw new Error(`Cloudflare D1 execution failed: ${JSON.stringify(queryResult.errors || 'Unknown query error')}`);
+        }
+
+        return {
+            rows: queryResult.results || [],
+            meta: queryResult.meta
+        };
+    }
+};
 
 // Initialize database table if it doesn't exist
 async function initDB() {
     try {
         await pool.query(`
             CREATE TABLE IF NOT EXISTS players (
+                id TEXT UNIQUE,
                 username VARCHAR(50),
                 score BIGINT DEFAULT 0
             )
         `);
 
-        try {
-            await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS id VARCHAR(100)`);
-            await pool.query(`UPDATE players SET id = username WHERE id IS NULL`);
-            await pool.query(`ALTER TABLE players DROP CONSTRAINT IF EXISTS players_pkey CASCADE`);
-            await pool.query(`ALTER TABLE players ADD CONSTRAINT players_id_unique UNIQUE (id)`);
-            await pool.query(`ALTER TABLE players ALTER COLUMN score TYPE BIGINT`);
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS settings (
+                key VARCHAR(50) PRIMARY KEY,
+                value TEXT
+            )
+        `);
 
-            // Add settings table for info/news
-            await pool.query(`
-                CREATE TABLE IF NOT EXISTS settings (
-                    key VARCHAR(50) PRIMARY KEY,
-                    value TEXT
-                )
-            `);
-            await pool.query(`
-                INSERT INTO settings (key, value) VALUES ('news', 'Selamat datang di Pop Balil 3!') ON CONFLICT (key) DO NOTHING
-            `);
-        } catch (migrationErr) {
-            console.log('Migration step skipped or already applied.', migrationErr);
-        }
+        await pool.query(`
+            INSERT INTO settings (key, value) VALUES ('news', 'Selamat datang di Pop Balil 3!') ON CONFLICT (key) DO NOTHING
+        `);
 
-        console.log('Database table "players" is ready.');
+        console.log('Database tables are ready in Cloudflare D1.');
     } catch (err) {
         console.error('Error initializing database at startup:', err);
     }
